@@ -1,54 +1,103 @@
 import os
 from telegram import Update, ChatPermissions
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import (
+        ApplicationBuilder,
+        CommandHandler,
+        MessageHandler,
+        filters,
+        ContextTypes,
+        CallbackContext
+    )
 from dotenv import load_dotenv
 import logging
+import asyncio
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
 
-# Load environment variables
+    # ===== HTTP Server Setup =====
+class HealthHandler(BaseHTTPRequestHandler):
+        """Simple server to handle health checks"""
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is running!")
+
+        def log_message(self, format, *args):
+            """Disable default HTTP logging"""
+            pass
+
+def run_http_server():
+        """Run HTTP server in a separate thread"""
+        try:
+            server = HTTPServer(('0.0.0.0', 8080), HealthHandler)
+            logger.info("HTTP server started on port 8080")
+            server.serve_forever()
+        except Exception as e:
+            logger.error(f"HTTP server failed: {e}")
+
+    # Start HTTP server thread
+Thread(target=run_http_server, daemon=True).start()
+    # ===== End HTTP Server =====
+
+    # Load environment variables
 load_dotenv()
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+    # Logging setup
+logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
 logger = logging.getLogger(__name__)
 
-# Bot token and group ID from .env
+    # Bot token and group ID
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 GROUP_CHAT_ID = int(os.getenv('GROUP_CHAT_ID'))
 
-# Group rules (sent every 48h)
+    # Group rules
 RULES_MESSAGE = """
-📜 **Group Rules** 📜
-1. Be respectful.
-2. No spam.
-3. Stay on topic.
+**Follow the Group Rules  »**
+
+➤ English only in this chat.
+➤ No racism, sexism, or toxicity.
+➤ No spamming.
+➤ No unlawful discussions.
+➤ Remain respectful to others.
+➤ No advertising.
+➤ Only dropshipping-related content is allowed.
 """
 
-def start(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("I'm your group manager bot!")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.message.reply_text("I'm your group manager bot!")
 
-def delete_join_messages(update: Update, context: CallbackContext) -> None:
-    """Delete 'user joined' messages."""
-    if update.message.new_chat_members:
-        update.message.delete()
+async def delete_join_leave_messages(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Delete 'user joined' and 'user left' messages with error handling."""
+        if update.message.new_chat_members or update.message.left_chat_member:
+            try:
+                await update.message.delete()
+            except Exception as e:
+                logger.warning(f"Couldn't delete join/leave message: {e}")
+                await context.bot.send_message(
+                    chat_id=GROUP_CHAT_ID,
+                    text=f"⚠️ Bot needs delete permissions! Error: {e}"
+                )
 
-def send_rules(context: CallbackContext) -> None:
-    """Send rules every 48 hours."""
-    context.bot.send_message(chat_id=GROUP_CHAT_ID, text=RULES_MESSAGE, parse_mode='Markdown')
+async def send_rules(context: CallbackContext) -> None:
+        """Send rules every 48 hours."""
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=RULES_MESSAGE,
+            parse_mode='Markdown'
+        )
 
-def main():
-    updater = Updater(TOKEN)
-    dispatcher = updater.dispatcher
-
-    # Handlers
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(MessageHandler(Filters.status_update.new_chat_members, delete_join_messages))
-
-    # Job queue (send rules every 48h)
-    job_queue = updater.job_queue
-    job_queue.run_repeating(send_rules, interval=172800, first=10)  # 48h in seconds
-
-    updater.start_polling()
-    updater.idle()
+def main() -> None:
+        """Start the bot."""
+        application = ApplicationBuilder().token(TOKEN).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(
+            MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS | filters.StatusUpdate.LEFT_CHAT_MEMBER, delete_join_leave_messages)
+        )
+        application.job_queue.run_repeating(send_rules, interval=172800, first=10)
+        application.run_polling()
 
 if __name__ == '__main__':
-    main()
+        main()
